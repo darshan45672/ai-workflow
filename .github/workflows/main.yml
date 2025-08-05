@@ -308,7 +308,7 @@ jobs:
 
   merge-winner:
     needs: [detect-competing-prs, github-native-evaluation]
-    if: needs.detect-competing-prs.outputs.should-evaluate == 'true'
+    if: needs.detect-competing-prs.outputs.should-evaluate == 'true' && needs.github-native-evaluation.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -322,12 +322,26 @@ jobs:
           script: |
             const evaluationsJson = '${{ needs.github-native-evaluation.outputs.all-evaluations }}';
             
-            if (!evaluationsJson || evaluationsJson === '') {
-              console.log('❌ No evaluations found - this should not happen if workflow conditions are correct');
+            console.log('📊 Evaluation JSON received:', evaluationsJson);
+            
+            if (!evaluationsJson || evaluationsJson === '' || evaluationsJson === 'null' || evaluationsJson === 'undefined') {
+              console.log('❌ No valid evaluations found - evaluation job may not have produced output');
               return;
             }
             
-            const allEvaluations = JSON.parse(evaluationsJson);
+            let allEvaluations;
+            try {
+              allEvaluations = JSON.parse(evaluationsJson);
+            } catch (parseError) {
+              console.error('❌ Failed to parse evaluations JSON:', parseError);
+              console.error('❌ Raw JSON content:', evaluationsJson);
+              return;
+            }
+            
+            if (!allEvaluations || allEvaluations.length === 0) {
+              console.log('❌ No evaluations in parsed data');
+              return;
+            }
             
             for (const groupResults of allEvaluations) {
               const winner = groupResults.winner;
