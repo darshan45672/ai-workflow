@@ -1,5 +1,6 @@
 name: GitHub Native AI-Powered PR Selection
 
+# Trigger test: Fixed syntax errors and matrix strategy issues
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
@@ -319,7 +320,14 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const allEvaluations = JSON.parse('${{ needs.github-native-evaluation.outputs.all-evaluations }}');
+            const evaluationsJson = '${{ needs.github-native-evaluation.outputs.all-evaluations }}';
+            
+            if (!evaluationsJson || evaluationsJson === '') {
+              console.log('❌ No evaluations found - this should not happen if workflow conditions are correct');
+              return;
+            }
+            
+            const allEvaluations = JSON.parse(evaluationsJson);
             
             for (const groupResults of allEvaluations) {
               const winner = groupResults.winner;
