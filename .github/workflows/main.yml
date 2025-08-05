@@ -1,5 +1,6 @@
 name: GitHub Native AI-Powered PR Selection
 
+# Trigger test: Fixed syntax errors and matrix strategy issues
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
