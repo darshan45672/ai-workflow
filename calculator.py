@@ -1,40 +1,34 @@
-# Simple Calculator Implementation
+# Basic Calculator Implementation - Feature Branch
 def add(a, b):
-    """Add two numbers"""
+    """Add two numbers with basic implementation"""
     return a + b
 
 def subtract(a, b):
-    """Subtract two numbers"""
+    """Subtract two numbers with basic implementation"""  
     return a - b
 
 def multiply(a, b):
-    """Multiply two numbers"""
+    """Multiply two numbers with basic implementation"""
     return a * b
 
 def divide(a, b):
-    """Divide two numbers"""
+    """Divide two numbers with basic error handling"""
     if b == 0:
         raise ValueError("Cannot divide by zero")
     return a / b
 
+def power(a, b):
+    """Calculate power of a number - basic feature"""
+    return a ** b
+
 if __name__ == "__main__":
-    print("Simple Calculator")
-    print("Operations: +, -, *, /")
+    print("Basic Calculator - Feature Implementation")
+    print("Available operations: +, -, *, /, **")
     
-    a = float(input("Enter first number: "))
-    op = input("Enter operation (+, -, *, /): ")
-    b = float(input("Enter second number: "))
-    
-    if op == "+":
-        result = add(a, b)
-    elif op == "-":
-        result = subtract(a, b)
-    elif op == "*":
-        result = multiply(a, b)
-    elif op == "/":
-        result = divide(a, b)
-    else:
-        print("Invalid operation")
-        exit(1)
-    
-    print(f"Result: {a} {op} {b} = {result}")
+    # Demo calculations
+    print(f"Demo: 5 + 3 = {add(5, 3)}")
+    print(f"Demo: 10 - 4 = {subtract(10, 4)}")
+    print(f"Demo: 6 * 7 = {multiply(6, 7)}")
+    print(f"Demo: 15 / 3 = {divide(15, 3)}")
+    print(f"Demo: 2 ** 3 = {power(2, 3)}")
+    print("Basic calculator implementation ready!")
