@@ -42,12 +42,16 @@ jobs:
               const branchName = pr.head.ref;
               const titleLower = pr.title.toLowerCase();
               
+              console.log(`🔍 Processing PR #${pr.number}: "${pr.title}" from branch "${branchName}"`);
+              
               let featureKey = null;
               
               // Enhanced feature detection
-              const branchMatch = branchName.match(/^(feature|bugfix|enhancement|fix|feat)\/(.+)/);
+              const branchMatch = branchName.match(/^(feature|bugfix|enhancement|fix|feat)([\/\-](.+)|[0-9]+)$/);
               if (branchMatch) {
-                featureKey = `${branchMatch[1]}-${branchMatch[2].split('-')[0]}`;
+                const prefix = branchMatch[1];
+                const suffix = branchMatch[3] || branchMatch[2] || 'default';
+                featureKey = `${prefix}-${suffix.split(/[\/\-]/)[0]}`;
               }
               
               // Label-based detection
@@ -63,15 +67,19 @@ jobs:
               // Keyword detection
               const keywords = [
                 'auth', 'login', 'user', 'dashboard', 'api', 'database', 'ui', 'frontend', 'backend',
-                'crud', 'rest', 'graphql', 'middleware', 'service', 'controller', 'model', 'view'
+                'crud', 'rest', 'graphql', 'middleware', 'service', 'controller', 'model', 'view',
+                'calculator', 'calc', 'math', 'compute', 'operation', 'function'
               ];
               
               for (const keyword of keywords) {
                 if (titleLower.includes(keyword)) {
                   featureKey = featureKey || `keyword-${keyword}`;
+                  console.log(`📍 Found keyword "${keyword}" in title, setting featureKey to: ${featureKey}`);
                   break;
                 }
               }
+              
+              console.log(`🎯 Final featureKey for PR #${pr.number}: ${featureKey || 'none'}`);
               
               if (featureKey) {
                 if (!featureGroups[featureKey]) {
@@ -97,6 +105,12 @@ jobs:
               }, {});
             
             const shouldEvaluate = Object.keys(competingGroups).length > 0;
+            
+            console.log(`📊 Found ${Object.keys(featureGroups).length} feature groups:`);
+            console.log(JSON.stringify(featureGroups, null, 2));
+            console.log(`📊 Found ${Object.keys(competingGroups).length} competing groups:`);
+            console.log(JSON.stringify(competingGroups, null, 2));
+            console.log(`🚀 Should evaluate: ${shouldEvaluate}`);
             
             core.setOutput('competing-prs', JSON.stringify(competingGroups));
             core.setOutput('should-evaluate', shouldEvaluate);
