@@ -50,8 +50,9 @@ jobs:
               const branchMatch = branchName.match(/^(feature|bugfix|enhancement|fix|feat)([\/\-](.+)|[0-9]+)$/);
               if (branchMatch) {
                 const prefix = branchMatch[1];
-                const suffix = branchMatch[3] || branchMatch[2] || 'default';
-                featureKey = `${prefix}-${suffix.split(/[\/\-]/)[0]}`;
+                // Group all feature branches together, regardless of suffix
+                featureKey = `${prefix}-branch`;
+                console.log(`🔍 Branch match found: ${branchName} -> ${featureKey}`);
               }
               
               // Label-based detection
@@ -73,7 +74,7 @@ jobs:
               
               for (const keyword of keywords) {
                 if (titleLower.includes(keyword)) {
-                  featureKey = featureKey || `keyword-${keyword}`;
+                  featureKey = `keyword-${keyword}`;  // Override branch-based grouping
                   console.log(`📍 Found keyword "${keyword}" in title, setting featureKey to: ${featureKey}`);
                   break;
                 }
