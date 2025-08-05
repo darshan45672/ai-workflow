@@ -389,13 +389,13 @@ jobs:
                     merge_method: 'squash'
                   });
                   
-                  console.log(`✅ Successfully merged PR #${winner.pr_number}`);
-                  console.log(`   Merge SHA: ${mergeResult.data.sha}`);
+                  console.log('✅ Successfully merged PR #' + winner.pr_number);
+                  console.log('   Merge SHA: ' + mergeResult.data.sha);
                   
                   // Close competing PRs with explanation
                   for (const evaluation of groupResults.evaluations) {
                     if (evaluation.pr_number !== winner.pr_number) {
-                      console.log(`❌ Closing competing PR #${evaluation.pr_number}`);
+                      console.log('❌ Closing competing PR #' + evaluation.pr_number);
                       
                       const closeComment = '## 🤖 AI-Powered PR Selection Results\\n\\n' +
                         '**This PR was not selected for automatic merging.**\\n\\n' +
@@ -428,7 +428,7 @@ jobs:
                   }
                   
                 } catch (error) {
-                  console.error(`❌ Failed to merge PR #${winner.pr_number}:`, error);
+                  console.error('❌ Failed to merge PR #' + winner.pr_number + ':', error);
                   
                   // Add comment about merge failure
                   await github.rest.issues.createComment({
@@ -439,7 +439,7 @@ jobs:
                   });
                 }
               } else {
-                console.log(`⚠️ Cannot merge PR #${winner.pr_number}: state=${winnerPR.state}, mergeable=${winnerPR.mergeable}`);
+                console.log('⚠️ Cannot merge PR #' + winner.pr_number + ': state=' + winnerPR.state + ', mergeable=' + winnerPR.mergeable);
                 
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
