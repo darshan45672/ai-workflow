@@ -120,9 +120,6 @@ jobs:
     needs: detect-competing-prs
     if: needs.detect-competing-prs.outputs.should-evaluate == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        feature: ${{ fromJson(needs.detect-competing-prs.outputs.competing-prs) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -132,318 +129,315 @@ jobs:
       - name: GitHub Native AI Evaluation
         id: evaluate
         env:
-          COMPETING_PRS: ${{ toJson(matrix.feature) }}
+          COMPETING_GROUPS: ${{ needs.detect-competing-prs.outputs.competing-prs }}
         uses: actions/github-script@v7
         with:
           script: |
-            const evaluations = [];
-            const competingPRs = JSON.parse(process.env.COMPETING_PRS);
+            const competingGroups = JSON.parse(process.env.COMPETING_GROUPS);
+            const allEvaluations = [];
             
-            for (const prData of competingPRs) {
-              console.log(`🔄 Evaluating PR #${prData.number}: ${prData.title}`);
+            // Process each competing group
+            for (const [groupName, competingPRs] of Object.entries(competingGroups)) {
+              console.log(`📊 Evaluating group: ${groupName} with ${competingPRs.length} PRs`);
               
-              // Get PR details using GitHub API
-              const { data: pr } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prData.number
-              });
+              const evaluations = [];
               
-              // Get PR files
-              const { data: files } = await github.rest.pulls.listFiles({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prData.number
-              });
-              
-              // Get PR commits
-              const { data: commits } = await github.rest.pulls.listCommits({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prData.number
-              });
-              
-              // Initialize evaluation scores
-              let evaluation = {
-                pr_number: prData.number,
-                title: prData.title,
-                author: prData.author,
-                scores: {},
-                total_score: 0,
-                details: {}
-              };
-              
-              // 1. Code Quality Score (based on GitHub's analysis)
-              let codeQualityScore = 50; // Base score
-              
-              // Analyze file changes
-              const totalAdditions = files.reduce((sum, file) => sum + file.additions, 0);
-              const totalDeletions = files.reduce((sum, file) => sum + file.deletions, 0);
-              const filesChanged = files.length;
-              
-              // Prefer smaller, focused changes
-              if (filesChanged <= 5) codeQualityScore += 15;
-              else if (filesChanged <= 10) codeQualityScore += 10;
-              else if (filesChanged > 20) codeQualityScore -= 10;
-              
-              // Analyze addition to deletion ratio
-              const changeRatio = totalDeletions > 0 ? totalAdditions / totalDeletions : totalAdditions;
-              if (changeRatio < 3) codeQualityScore += 10; // Good refactoring
-              if (changeRatio > 10) codeQualityScore -= 5; // Too many additions
-              
-              evaluation.scores.code_quality = Math.max(0, Math.min(100, codeQualityScore));
-              evaluation.details.files_changed = filesChanged;
-              evaluation.details.additions = totalAdditions;
-              evaluation.details.deletions = totalDeletions;
-              
-              // 2. Git Quality Score (commit analysis)
-              let gitQualityScore = 0;
-              const conventionalCommitPattern = /^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .{10,}/;
-              
-              let goodCommits = 0;
-              for (const commit of commits) {
-                if (conventionalCommitPattern.test(commit.commit.message)) {
-                  goodCommits++;
+              for (const prData of competingPRs) {
+                console.log(`🔄 Evaluating PR #${prData.number}: ${prData.title}`);
+                
+                // Get PR details using GitHub API
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prData.number
+                });
+                
+                // Get PR files
+                const { data: files } = await github.rest.pulls.listFiles({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prData.number
+                });
+                
+                // Get PR commits
+                const { data: commits } = await github.rest.pulls.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prData.number
+                });
+                
+                // Initialize evaluation scores
+                let evaluation = {
+                  pr_number: prData.number,
+                  title: prData.title,
+                  author: prData.author,
+                  scores: {},
+                  total_score: 0,
+                  details: {},
+                  group: groupName
+                };
+                
+                // 1. Code Quality Score (based on GitHub's analysis)
+                let codeQualityScore = 50; // Base score
+                
+                // Analyze file changes
+                const totalAdditions = files.reduce((sum, file) => sum + file.additions, 0);
+                const totalDeletions = files.reduce((sum, file) => sum + file.deletions, 0);
+                const filesChanged = files.length;
+                
+                // Prefer smaller, focused changes
+                if (filesChanged <= 5) codeQualityScore += 15;
+                else if (filesChanged <= 10) codeQualityScore += 10;
+                else if (filesChanged > 20) codeQualityScore -= 10;
+                
+                // Analyze addition to deletion ratio
+                const changeRatio = totalDeletions > 0 ? totalAdditions / totalDeletions : totalAdditions;
+                if (changeRatio < 3) codeQualityScore += 10; // Good refactoring
+                if (changeRatio > 10) codeQualityScore -= 5; // Too many additions
+                
+                evaluation.scores.code_quality = Math.max(0, Math.min(100, codeQualityScore));
+                evaluation.details.files_changed = filesChanged;
+                evaluation.details.additions = totalAdditions;
+                evaluation.details.deletions = totalDeletions;
+                
+                // 2. Git Quality Score (commit analysis)
+                let gitQualityScore = 0;
+                const conventionalCommitPattern = /^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .{10,}/;
+                
+                let goodCommits = 0;
+                for (const commit of commits) {
+                  if (conventionalCommitPattern.test(commit.commit.message)) {
+                    goodCommits++;
+                  }
                 }
+                
+                gitQualityScore = commits.length > 0 ? (goodCommits / commits.length) * 100 : 0;
+                evaluation.scores.git_quality = gitQualityScore;
+                evaluation.details.total_commits = commits.length;
+                evaluation.details.good_commits = goodCommits;
+                
+                // 3. PR Description Quality
+                let descriptionScore = 0;
+                const description = pr.body || '';
+                
+                if (description.length > 50) descriptionScore += 30;
+                if (description.includes('##') || description.includes('**')) descriptionScore += 20; // Has formatting
+                if (description.includes('test') || description.includes('Test')) descriptionScore += 20;
+                if (description.includes('fix') || description.includes('Fix')) descriptionScore += 15;
+                if (description.length > 200) descriptionScore += 15;
+                
+                evaluation.scores.description_quality = Math.min(100, descriptionScore);
+                evaluation.details.description_length = description.length;
+                
+                // 4. Timing Score (earlier PRs get slight advantage)
+                const createdAt = new Date(prData.created_at);
+                const now = new Date();
+                const ageInHours = (now - createdAt) / (1000 * 60 * 60);
+                
+                let timingScore = 50;
+                if (ageInHours > 168) timingScore += 20; // Week old PRs get bonus for stability
+                else if (ageInHours > 24) timingScore += 10; // Day old PRs get small bonus
+                
+                evaluation.scores.timing = timingScore;
+                evaluation.details.age_hours = Math.round(ageInHours);
+                
+                // 5. File Type Analysis
+                let fileTypeScore = 50;
+                const hasTests = files.some(file => 
+                  file.filename.includes('test') || 
+                  file.filename.includes('spec') ||
+                  file.filename.includes('__tests__')
+                );
+                const hasDocumentation = files.some(file => 
+                  file.filename.includes('README') || 
+                  file.filename.includes('doc') ||
+                  file.filename.includes('.md')
+                );
+                
+                if (hasTests) fileTypeScore += 25;
+                if (hasDocumentation) fileTypeScore += 15;
+                
+                // Check for config files (usually good)
+                const hasConfig = files.some(file => 
+                  file.filename.includes('config') ||
+                  file.filename.includes('.json') ||
+                  file.filename.includes('.yml') ||
+                  file.filename.includes('.yaml')
+                );
+                if (hasConfig) fileTypeScore += 10;
+                
+                evaluation.scores.file_analysis = Math.min(100, fileTypeScore);
+                evaluation.details.has_tests = hasTests;
+                evaluation.details.has_documentation = hasDocumentation;
+                evaluation.details.has_config = hasConfig;
+                
+                // Calculate total score with weights
+                evaluation.total_score = 
+                  (evaluation.scores.code_quality * 0.30) +
+                  (evaluation.scores.git_quality * 0.25) +
+                  (evaluation.scores.description_quality * 0.20) +
+                  (evaluation.scores.file_analysis * 0.15) +
+                  (evaluation.scores.timing * 0.10);
+                
+                evaluations.push(evaluation);
+                console.log(`✅ PR #${prData.number} scored: ${evaluation.total_score.toFixed(2)}`);
               }
               
-              gitQualityScore = commits.length > 0 ? (goodCommits / commits.length) * 100 : 0;
-              evaluation.scores.git_quality = gitQualityScore;
-              evaluation.details.total_commits = commits.length;
-              evaluation.details.good_commits = goodCommits;
-              
-              // 3. PR Description Quality
-              let descriptionScore = 0;
-              const description = pr.body || '';
-              
-              if (description.length > 50) descriptionScore += 30;
-              if (description.includes('##') || description.includes('**')) descriptionScore += 20; // Has formatting
-              if (description.includes('test') || description.includes('Test')) descriptionScore += 20;
-              if (description.includes('fix') || description.includes('Fix')) descriptionScore += 15;
-              if (description.length > 200) descriptionScore += 15;
-              
-              evaluation.scores.description_quality = Math.min(100, descriptionScore);
-              evaluation.details.description_length = description.length;
-              
-              // 4. Timing Score (earlier PRs get slight advantage)
-              const createdAt = new Date(prData.created_at);
-              const now = new Date();
-              const ageInHours = (now - createdAt) / (1000 * 60 * 60);
-              
-              let timingScore = 50;
-              if (ageInHours > 168) timingScore += 20; // Week old PRs get bonus for stability
-              else if (ageInHours > 24) timingScore += 10; // Day old PRs get small bonus
-              
-              evaluation.scores.timing = timingScore;
-              evaluation.details.age_hours = Math.round(ageInHours);
-              
-              // 5. File Type Analysis
-              let fileTypeScore = 50;
-              const hasTests = files.some(file => 
-                file.filename.includes('test') || 
-                file.filename.includes('spec') ||
-                file.filename.includes('__tests__')
-              );
-              const hasDocumentation = files.some(file => 
-                file.filename.includes('README') || 
-                file.filename.includes('doc') ||
-                file.filename.includes('.md')
+              // Find winner for this group
+              const winner = evaluations.reduce((prev, current) => 
+                (prev.total_score > current.total_score) ? prev : current
               );
               
-              if (hasTests) fileTypeScore += 25;
-              if (hasDocumentation) fileTypeScore += 15;
+              // Save results for this group
+              const results = {
+                feature_group: groupName,
+                evaluations: evaluations,
+                winner: winner,
+                timestamp: new Date().toISOString()
+              };
               
-              // Check for config files (usually good)
-              const hasConfig = files.some(file => 
-                file.filename.includes('config') ||
-                file.filename.includes('.json') ||
-                file.filename.includes('.yml') ||
-                file.filename.includes('.yaml')
-              );
-              if (hasConfig) fileTypeScore += 10;
-              
-              evaluation.scores.file_analysis = Math.min(100, fileTypeScore);
-              evaluation.details.has_tests = hasTests;
-              evaluation.details.has_documentation = hasDocumentation;
-              evaluation.details.has_config = hasConfig;
-              
-              // Calculate total score with weights
-              evaluation.total_score = 
-                (evaluation.scores.code_quality * 0.30) +
-                (evaluation.scores.git_quality * 0.25) +
-                (evaluation.scores.description_quality * 0.20) +
-                (evaluation.scores.file_analysis * 0.15) +
-                (evaluation.scores.timing * 0.10);
-              
-              evaluations.push(evaluation);
-              console.log(`✅ PR #${prData.number} scored: ${evaluation.total_score.toFixed(2)}`);
+              allEvaluations.push(results);
             }
             
-            // Find winner
-            const winner = evaluations.reduce((prev, current) => 
-              (prev.total_score > current.total_score) ? prev : current
-            );
-            
-            // Save results
-            const results = {
-              feature_group: Object.keys(JSON.parse(process.env.COMPETING_PRS))[0],
-              evaluations: evaluations,
-              winner: winner,
-              timestamp: new Date().toISOString()
-            };
-            
+            // Save all results
             const fs = require('fs');
-            fs.writeFileSync('pr-evaluations.json', JSON.stringify(results, null, 2));
+            fs.writeFileSync('pr-evaluations.json', JSON.stringify(allEvaluations, null, 2));
             
-            core.setOutput('winner-pr', winner.pr_number);
-            core.setOutput('evaluations', JSON.stringify(evaluations));
-
-      - name: Upload evaluation results
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-evaluations-${{ strategy.job-index }}
-          path: pr-evaluations.json
+            core.setOutput('all-evaluations', JSON.stringify(allEvaluations));
 
   merge-winner:
     needs: [detect-competing-prs, github-native-evaluation]
-    runs-on: ubuntu-latest
     if: needs.detect-competing-prs.outputs.should-evaluate == 'true'
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Download evaluation results
-        uses: actions/download-artifact@v4
         with:
-          pattern: pr-evaluations-*
-          merge-multiple: true
+          fetch-depth: 0
 
-      - name: Process results and merge winners
+      - name: Merge Winner PR
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
+            const allEvaluations = JSON.parse('${{ needs.github-native-evaluation.outputs.all-evaluations }}');
             
-            const evaluationFiles = fs.readdirSync('.').filter(f => f.startsWith('pr-evaluations'));
-            
-            for (const file of evaluationFiles) {
-              const evaluation = JSON.parse(fs.readFileSync(file, 'utf8'));
-              const winner = evaluation.winner;
-              const losers = evaluation.evaluations.filter(e => e.pr_number !== winner.pr_number);
+            for (const groupResults of allEvaluations) {
+              const winner = groupResults.winner;
               
-              console.log(`🏆 Winner: PR #${winner.pr_number} with score ${winner.total_score.toFixed(2)}`);
+              console.log(`🏆 Winner for group ${groupResults.feature_group}: PR #${winner.pr_number} with score ${winner.total_score.toFixed(2)}`);
               
-              // Create detailed winner comment
-              const winnerComment = `🏆 **GitHub Native AI Workflow Winner!**
-              This PR has been selected as the best implementation with a score of **${winner.total_score.toFixed(2)}/100**.
-              **📊 Detailed Evaluation Breakdown:**
-              - 🔍 **Code Quality**: ${winner.scores.code_quality?.toFixed(1)}/100
-              - Files changed: ${winner.details.files_changed}
-              - Lines added: ${winner.details.additions}
-              - Lines deleted: ${winner.details.deletions}
-              
-              - 📝 **Git Quality**: ${winner.scores.git_quality?.toFixed(1)}/100
-              - Total commits: ${winner.details.total_commits}
-              - Conventional commits: ${winner.details.good_commits}
-              - 📚 **Description Quality**: ${winner.scores.description_quality?.toFixed(1)}/100
-              - Description length: ${winner.details.description_length} characters
-              - 📁 **File Analysis**: ${winner.scores.file_analysis?.toFixed(1)}/100
-              - Has tests: ${winner.details.has_tests ? '✅' : '❌'}
-              - Has documentation: ${winner.details.has_documentation ? '✅' : '❌'}
-              - Has config files: ${winner.details.has_config ? '✅' : '❌'}
-              - ⏰ **Timing**: ${winner.scores.timing?.toFixed(1)}/100
-              - PR age: ${winner.details.age_hours} hours
-              **🏃‍♀️ Competing PRs:**
-              ${losers.map(pr => `- PR #${pr.pr_number} by @${pr.author}: ${pr.total_score.toFixed(2)}/100`).join('\n')}
-
-              *Evaluated using GitHub's native analysis tools! 🚀*`;
-              await github.rest.issues.createComment({
+              // Get the winning PR details
+              const { data: winnerPR } = await github.rest.pulls.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: winner.pr_number,
-                body: winnerComment
+                pull_number: winner.pr_number
               });
-
-              // Comment on losing PRs
-              for (const loser of losers) {
-                const loserComment = `🤖 **GitHub Native AI Evaluation Results**
-
-                Your PR was evaluated but not selected for automatic merge.
-
-                **📊 Your Score:** ${loser.total_score.toFixed(2)}/100
-                **🏆 Winner:** PR #${winner.pr_number} with ${winner.total_score.toFixed(2)}/100
-
-
-                **Your Detailed Breakdown:**
-
-                - 🔍 Code Quality: ${loser.scores.code_quality?.toFixed(1)}/100 (${loser.details.files_changed} files, +${loser.details.additions}/-${loser.details.deletions} lines)
-
-                - 📝 Git Quality: ${loser.scores.git_quality?.toFixed(1)}/100 (${loser.details.good_commits}/${loser.details.total_commits} conventional commits)
-
-                - 📚 Description: ${loser.scores.description_quality?.toFixed(1)}/100 (${loser.details.description_length} chars)
-
-                - 📁 File Analysis: ${loser.scores.file_analysis?.toFixed(1)}/100
-
-                - ⏰ Timing: ${loser.scores.timing?.toFixed(1)}/100
-
-
-                **💡 Improvement Suggestions:**
-
-                ${loser.scores.git_quality < 50 ? '- Use conventional commit messages (feat:, fix:, docs:, etc.)\n' : ''}${loser.scores.description_quality < 50 ? '- Add a more detailed PR description\n' : ''}${!loser.details.has_tests ? '- Add tests for your changes\n' : ''}${!loser.details.has_documentation ? '- Update documentation\n' : ''}
-
-                Consider the winning implementation's strengths for future contributions! 🚀`;
-
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: loser.pr_number,
-                  body: loserComment
-                });
-              }
               
-              // Approve and merge winner
-              try {
-                // First, check if we can merge (all checks passed, etc.)
-                const { data: prDetails } = await github.rest.pulls.get({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: winner.pr_number
-                });
-                
-                if (prDetails.mergeable && !prDetails.draft) {
-                  await github.rest.pulls.createReview({
+              console.log(`📋 Winner PR details:`);
+              console.log(`   Title: ${winnerPR.title}`);
+              console.log(`   Author: ${winnerPR.user.login}`);
+              console.log(`   Branch: ${winnerPR.head.ref}`);
+              console.log(`   Target: ${winnerPR.base.ref}`);
+              
+              // Check if PR can be merged
+              if (winnerPR.state === 'open' && winnerPR.mergeable) {
+                try {
+                  // Add evaluation results as a comment before merging
+                  const evaluationComment = '## 🤖 AI-Powered PR Selection Results\\n\\n' +
+                    '**🏆 This PR has been selected as the winner!**\\n\\n' +
+                    '### Evaluation Scores:\\n' +
+                    '- **Code Quality**: ' + winner.scores.code_quality.toFixed(1) + '/100 (30% weight)\\n' +
+                    '- **Git Quality**: ' + winner.scores.git_quality.toFixed(1) + '/100 (25% weight)\\n' +
+                    '- **Description Quality**: ' + winner.scores.description_quality.toFixed(1) + '/100 (20% weight)\\n' +
+                    '- **File Analysis**: ' + winner.scores.file_analysis.toFixed(1) + '/100 (15% weight)\\n' +
+                    '- **Timing**: ' + winner.scores.timing.toFixed(1) + '/100 (10% weight)\\n\\n' +
+                    '**Total Score: ' + winner.total_score.toFixed(2) + '/100**\\n\\n' +
+                    '### Analysis Details:\\n' +
+                    '- Files Changed: ' + winner.details.files_changed + '\\n' +
+                    '- Lines Added: ' + winner.details.additions + '\\n' +
+                    '- Lines Deleted: ' + winner.details.deletions + '\\n' +
+                    '- Commits: ' + winner.details.total_commits + ' (' + winner.details.good_commits + ' well-formatted)\\n' +
+                    '- Has Tests: ' + (winner.details.has_tests ? '✅' : '❌') + '\\n' +
+                    '- Has Documentation: ' + (winner.details.has_documentation ? '✅' : '❌') + '\\n' +
+                    '- Age: ' + winner.details.age_hours + ' hours\\n\\n' +
+                    '### Competing PRs:\\n' +
+                    groupResults.evaluations.map(eval => '- PR #' + eval.pr_number + ': ' + eval.title + ' - Score: ' + eval.total_score.toFixed(2)).join('\\n') + '\\n\\n' +
+                    '*Automatically merged by GitHub Native AI-Powered PR Selection*';
+                  
+                  await github.rest.issues.createComment({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
-                    pull_number: winner.pr_number,
-                    event: 'APPROVE',
-                    body: '🤖 Automatically approved by GitHub Native AI Workflow'
+                    issue_number: winner.pr_number,
+                    body: evaluationComment
                   });
                   
-                  await github.rest.pulls.merge({
+                  // Merge the winning PR
+                  const mergeResult = await github.rest.pulls.merge({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     pull_number: winner.pr_number,
-                    commit_title: `🤖 Auto-merge: ${winner.title}`,
-                    commit_message: `Automatically merged by GitHub Native AI Workflow\n\nScore: ${winner.total_score.toFixed(2)}/100\nEvaluation: GitHub native analysis`,
+                    commit_title: '🤖 Auto-merge: ' + winnerPR.title,
+                    commit_message: 'Automatically merged by AI-Powered PR Selection\\n\\nScore: ' + winner.total_score.toFixed(2) + '/100\\nGroup: ' + groupResults.feature_group + '\\nTimestamp: ' + groupResults.timestamp,
                     merge_method: 'squash'
                   });
                   
                   console.log(`✅ Successfully merged PR #${winner.pr_number}`);
-                } else {
-                  throw new Error('PR not mergeable or is draft');
+                  console.log(`   Merge SHA: ${mergeResult.data.sha}`);
+                  
+                  // Close competing PRs with explanation
+                  for (const evaluation of groupResults.evaluations) {
+                    if (evaluation.pr_number !== winner.pr_number) {
+                      console.log(`❌ Closing competing PR #${evaluation.pr_number}`);
+                      
+                      const closeComment = '## 🤖 AI-Powered PR Selection Results\\n\\n' +
+                        '**This PR was not selected for automatic merging.**\\n\\n' +
+                        'A competing PR (#' + winner.pr_number + ') was chosen based on evaluation scores:\\n\\n' +
+                        '### Your PR\\'s Scores:\\n' +
+                        '- **Code Quality**: ' + evaluation.scores.code_quality.toFixed(1) + '/100\\n' +
+                        '- **Git Quality**: ' + evaluation.scores.git_quality.toFixed(1) + '/100\\n' +
+                        '- **Description Quality**: ' + evaluation.scores.description_quality.toFixed(1) + '/100\\n' +
+                        '- **File Analysis**: ' + evaluation.scores.file_analysis.toFixed(1) + '/100\\n' +
+                        '- **Timing**: ' + evaluation.scores.timing.toFixed(1) + '/100\\n\\n' +
+                        '**Your Total Score: ' + evaluation.total_score.toFixed(2) + '/100**\\n' +
+                        '**Winning Score: ' + winner.total_score.toFixed(2) + '/100**\\n\\n' +
+                        'Thank you for your contribution! Please consider the feedback for future PRs.\\n\\n' +
+                        '*Automatically closed by GitHub Native AI-Powered PR Selection*';
+                      
+                      await github.rest.issues.createComment({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        issue_number: evaluation.pr_number,
+                        body: closeComment
+                      });
+                      
+                      await github.rest.pulls.update({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        pull_number: evaluation.pr_number,
+                        state: 'closed'
+                      });
+                    }
+                  }
+                  
+                } catch (error) {
+                  console.error(`❌ Failed to merge PR #${winner.pr_number}:`, error);
+                  
+                  // Add comment about merge failure
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: winner.pr_number,
+                    body: '## ⚠️ Auto-merge Failed\\n\\nThis PR was selected as the winner (score: ' + winner.total_score.toFixed(2) + ') but could not be automatically merged.\\n\\nError: ' + error.message + '\\n\\nPlease review and merge manually.'
+                  });
                 }
-                
-              } catch (error) {
-                console.log(`❌ Failed to merge PR #${winner.pr_number}:`, error.message);
+              } else {
+                console.log(`⚠️ Cannot merge PR #${winner.pr_number}: state=${winnerPR.state}, mergeable=${winnerPR.mergeable}`);
                 
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: winner.pr_number,
-                  body: `⚠️ **Auto-merge failed**: ${error.message}\n\nThis PR won the evaluation but couldn't be merged automatically. Please merge manually after reviewing the results.`
-                });
-              }
-            }
+                  body: '## 🏆 AI Selection Winner!\\n\\nThis PR scored ' + winner.total_score.toFixed(2) + '/100 and was selected as the winner, but cannot be automatically merged.\\n\\nReason: PR state is \\'' + winnerPR.state + '\\' and mergeable status is \\'' + winnerPR.mergeable + '\\'\\n\\nPlease review and merge manually.'
                 });
               }
             }
