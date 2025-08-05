@@ -1,0 +1,69 @@
+{
+  "scoring": {
+    "weights": {
+      "codeQuality": 0.30,
+      "testing": 0.25,
+      "performance": 0.20,
+      "security": 0.15,
+      "documentation": 0.10
+    },
+    "thresholds": {
+      "minimumScore": 70,
+      "autoMergeScore": 90,
+      "codeQualityMin": 60,
+      "testingMin": 70,
+      "performanceMin": 50,
+      "securityMin": 80,
+      "documentationMin": 40
+    }
+  },
+  "featureDetection": {
+    "branchPatterns": [
+      "feature/*",
+      "feat/*",
+      "enhancement/*",
+      "improvement/*"
+    ],
+    "labelKeywords": [
+      "feature",
+      "enhancement",
+      "new-feature",
+      "improvement"
+    ],
+    "titleSimilarityThreshold": 0.7,
+    "fileOverlapThreshold": 0.3
+  },
+  "analysis": {
+    "codeQuality": {
+      "complexityThreshold": 10,
+      "duplicateThreshold": 5,
+      "maintainabilityMin": 70
+    },
+    "testing": {
+      "minCoverage": 80,
+      "requiredTestTypes": ["unit", "integration"]
+    },
+    "performance": {
+      "maxLoadTime": 2000,
+      "maxMemoryUsage": 512,
+      "benchmarkThreshold": 0.95
+    },
+    "security": {
+      "vulnerabilityThreshold": 0,
+      "requiredChecks": ["dependency-scan", "static-analysis"]
+    }
+  },
+  "notifications": {
+    "channels": ["pr-comments", "slack", "email"],
+    "stakeholders": {
+      "reviewers": true,
+      "authors": true,
+      "maintainers": true
+    }
+  },
+  "rollback": {
+    "enabled": true,
+    "timeoutMinutes": 60,
+    "conditions": ["test-failure", "performance-regression", "security-issue"]
+  }
+}

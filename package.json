@@ -1,0 +1,19 @@
+{
+  "name": "ai-workflow",
+  "version": "1.0.0",
+  "description": "AI-powered PR selection and merging system",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["ai", "github", "pr", "workflow", "automation"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.10.0",
+    "@actions/github": "^5.1.1",
+    "@octokit/rest": "^19.0.0",
+    "semver": "^7.5.0",
+    "similarity": "^1.2.1"
+  }
+}

@@ -1,0 +1,491 @@
+name: Superior Code Snippet Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      evaluation_report_artifact:
+        description: 'Evaluation report artifact name'
+        required: true
+        type: string
+      winner_pr:
+        description: 'Winning PR number'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  integrate-snippets:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Download evaluation report
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ github.event.inputs.evaluation_report_artifact }}
+        path: ./artifacts/
+
+    - name: Configure Git
+      run: |
+        git config --global user.name "AI Workflow Bot"
+        git config --global user.email "ai-workflow@github.com"
+
+    - name: Create snippet integration branch
+      id: branch
+      run: |
+        BRANCH_NAME="ai-integration/snippets-$(date +%Y%m%d-%H%M%S)"
+        echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        git checkout -b "$BRANCH_NAME"
+
+    - name: Analyze and prepare snippet integration
+      id: integration
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        node -e "
+        const fs = require('fs');
+        const path = require('path');
+        
+        async function prepareIntegration() {
+          try {
+            const report = JSON.parse(fs.readFileSync('./artifacts/evaluation-report.json', 'utf8'));
+            
+            console.log('Found', report.superiorSnippets.length, 'superior snippets to integrate');
+            
+            if (report.superiorSnippets.length === 0) {
+              console.log('No snippets to integrate');
+              console.log('::set-output name=has_snippets::false');
+              return;
+            }
+            
+            // Group snippets by complexity and type
+            const lowComplexity = report.superiorSnippets.filter(s => s.integrationComplexity === 'low');
+            const mediumComplexity = report.superiorSnippets.filter(s => s.integrationComplexity === 'medium');
+            const highComplexity = report.superiorSnippets.filter(s => s.integrationComplexity === 'high');
+            
+            console.log('Low complexity:', lowComplexity.length);
+            console.log('Medium complexity:', mediumComplexity.length);
+            console.log('High complexity:', highComplexity.length);
+            
+            // Start with low complexity integrations
+            const integration = {
+              totalSnippets: report.superiorSnippets.length,
+              processedSnippets: 0,
+              successfulIntegrations: 0,
+              failedIntegrations: 0,
+              integrations: [],
+              skipped: []
+            };
+            
+            // Process low complexity snippets automatically
+            for (const snippet of lowComplexity.slice(0, 5)) { // Limit to 5 for safety
+              try {
+                const result = await integrateSnippet(snippet);
+                if (result.success) {
+                  integration.successfulIntegrations++;
+                  integration.integrations.push(result);
+                } else {
+                  integration.failedIntegrations++;
+                  integration.skipped.push({ snippet, reason: result.reason });
+                }
+                integration.processedSnippets++;
+              } catch (error) {
+                console.error('Integration failed for snippet:', error.message);
+                integration.failedIntegrations++;
+                integration.skipped.push({ snippet, reason: error.message });
+              }
+            }
+            
+            // Mark medium and high complexity for manual review
+            [...mediumComplexity, ...highComplexity].forEach(snippet => {
+              integration.skipped.push({ 
+                snippet, 
+                reason: 'Requires manual review due to complexity'
+              });
+            });
+            
+            // Save integration report
+            fs.writeFileSync('integration-report.json', JSON.stringify(integration, null, 2));
+            
+            console.log('::set-output name=has_snippets::true');
+            console.log('::set-output name=processed_count::' + integration.processedSnippets);
+            console.log('::set-output name=success_count::' + integration.successfulIntegrations);
+            console.log('::set-output name=failed_count::' + integration.failedIntegrations);
+            
+          } catch (error) {
+            console.error('Integration preparation failed:', error.message);
+            process.exit(1);
+          }
+        }
+        
+        async function integrateSnippet(snippet) {
+          // This is a simplified integration - in practice, this would need more sophisticated merging
+          try {
+            if (snippet.type === 'function') {
+              return await integrateFunctionSnippet(snippet);
+            } else if (snippet.type === 'improvement') {
+              return await integrateImprovementSnippet(snippet);
+            } else if (snippet.type === 'new_file') {
+              return await integrateNewFileSnippet(snippet);
+            }
+            
+            return { success: false, reason: 'Unknown snippet type' };
+          } catch (error) {
+            return { success: false, reason: error.message };
+          }
+        }
+        
+        async function integrateFunctionSnippet(snippet) {
+          // Create a comment with the superior function for manual integration
+          const commentFile = \`integration-suggestions/\${snippet.functionName}-from-pr-\${snippet.pr.number}.md\`;
+          
+          const content = \`# Superior Function Integration Suggestion
+        
+        ## Source
+        - **PR #\${snippet.pr.number}**: \${snippet.pr.title}
+        - **Author**: @\${snippet.pr.author}
+        - **Quality Score**: \${snippet.quality.score}/100
+        - **File**: \${snippet.filename}
+        - **Function**: \${snippet.functionName}
+        
+        ## Reasoning
+        \${snippet.reasoning}
+        
+        ## Suggested Integration
+        
+        \\\`\\\`\\\`javascript
+        \${snippet.snippet}
+        \\\`\\\`\\\`
+        
+        ## Integration Notes
+        - Integration Complexity: \${snippet.integrationComplexity}
+        - Recommended action: Review and manually integrate if appropriate
+        - Consider testing thoroughly after integration
+        \`;
+        
+          // Ensure directory exists
+          if (!fs.existsSync('integration-suggestions')) {
+            fs.mkdirSync('integration-suggestions', { recursive: true });
+          }
+          
+          fs.writeFileSync(commentFile, content);
+          
+          return {
+            success: true,
+            type: 'function',
+            file: commentFile,
+            snippet: snippet
+          };
+        }
+        
+        async function integrateImprovementSnippet(snippet) {
+          // Create improvement suggestion
+          const suggestionFile = \`integration-suggestions/improvement-\${path.basename(snippet.filename)}-pr-\${snippet.pr.number}.md\`;
+          
+          const content = \`# Code Improvement Suggestion
+        
+        ## Source
+        - **PR #\${snippet.pr.number}**: \${snippet.pr.title}
+        - **Author**: @\${snippet.pr.author}
+        - **Quality Score**: \${snippet.quality.score}/100
+        - **File**: \${snippet.filename}
+        
+        ## Reasoning
+        \${snippet.reasoning}
+        
+        ## Current Implementation (from winning PR)
+        \\\`\\\`\\\`
+        \${snippet.winningAlternative ? snippet.winningAlternative.code : 'Not available'}
+        \\\`\\\`\\\`
+        
+        ## Suggested Improvement
+        \\\`\\\`\\\`
+        \${snippet.snippet.code || snippet.snippet}
+        \\\`\\\`\\\`
+        
+        ## Integration Notes
+        - Integration Complexity: \${snippet.integrationComplexity}
+        - This is a suggested improvement to existing code
+        - Review for compatibility and test thoroughly
+        \`;
+        
+          if (!fs.existsSync('integration-suggestions')) {
+            fs.mkdirSync('integration-suggestions', { recursive: true });
+          }
+          
+          fs.writeFileSync(suggestionFile, content);
+          
+          return {
+            success: true,
+            type: 'improvement',
+            file: suggestionFile,
+            snippet: snippet
+          };
+        }
+        
+        async function integrateNewFileSnippet(snippet) {
+          // For new files, create them in a suggestions directory for review
+          const fileName = path.basename(snippet.filename);
+          const suggestionPath = \`integration-suggestions/new-files/\${fileName}\`;
+          
+          const headerComment = \`/*
+         * Superior file from PR #\${snippet.pr.number}
+         * Author: @\${snippet.pr.author}
+         * Quality Score: \${snippet.quality.score}/100
+         * Reasoning: \${snippet.reasoning}
+         * 
+         * Integration Notes:
+         * - This file was identified as superior in the AI evaluation
+         * - Review for integration into the main codebase
+         * - Consider potential conflicts with existing files
+         * - Test thoroughly before integrating
+         */
+        
+        \`;
+          
+          if (!fs.existsSync('integration-suggestions/new-files')) {
+            fs.mkdirSync('integration-suggestions/new-files', { recursive: true });
+          }
+          
+          // Extract actual file content from patch
+          const lines = snippet.snippet.split('\\n');
+          const contentLines = lines.filter(line => line.startsWith('+')).map(line => line.substring(1));
+          
+          fs.writeFileSync(suggestionPath, headerComment + contentLines.join('\\n'));
+          
+          return {
+            success: true,
+            type: 'new_file',
+            file: suggestionPath,
+            snippet: snippet
+          };
+        }
+        
+        prepareIntegration();
+        "
+
+    - name: Commit integration suggestions
+      if: steps.integration.outputs.has_snippets == 'true'
+      run: |
+        git add .
+        git commit -m "🤖 AI Integration: Add superior code snippets from competing PRs
+
+        - Processed: ${{ steps.integration.outputs.processed_count }} snippets
+        - Successfully integrated: ${{ steps.integration.outputs.success_count }}
+        - Requires manual review: ${{ steps.integration.outputs.failed_count }}
+        
+        These suggestions were generated by the AI evaluation system.
+        Please review each suggestion carefully before integrating."
+
+    - name: Push integration branch
+      if: steps.integration.outputs.has_snippets == 'true'
+      run: |
+        git push origin ${{ steps.branch.outputs.branch_name }}
+
+    - name: Create integration PR
+      if: steps.integration.outputs.has_snippets == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('./artifacts/evaluation-report.json', 'utf8'));
+          const integration = JSON.parse(fs.readFileSync('integration-report.json', 'utf8'));
+          
+          const prBody = `## 🤖 AI-Generated Code Integration Suggestions
+          
+          This PR contains superior code snippets identified from competing PRs in the feature evaluation for **${report.featureGroup}**.
+          
+          ### Integration Summary
+          - **Total Snippets Analyzed**: ${integration.totalSnippets}
+          - **Suggestions Created**: ${integration.successfulIntegrations}
+          - **Requires Manual Review**: ${integration.skipped.length}
+          
+          ### Source PRs
+          ${report.superiorSnippets.map(s => `- PR #${s.pr.number}: ${s.pr.title} by @${s.pr.author}`).join('\n')}
+          
+          ### Integration Details
+          ${integration.integrations.map(i => `
+          #### ${i.type.charAt(0).toUpperCase() + i.type.slice(1)} Integration
+          - **File**: ${i.file}
+          - **Quality Score**: ${i.snippet.quality.score}/100
+          - **Complexity**: ${i.snippet.integrationComplexity}
+          - **Reasoning**: ${i.snippet.reasoning}
+          `).join('\n')}
+          
+          ${integration.skipped.length > 0 ? `
+          ### Requires Manual Review (${integration.skipped.length} items)
+          ${integration.skipped.map(s => `- **${s.snippet.type}** from PR #${s.snippet.pr.number}: ${s.reason}`).join('\n')}
+          ` : ''}
+          
+          ### ⚠️ Important Notes
+          - **Review Required**: All suggestions require careful manual review
+          - **Testing**: Test thoroughly after any integration
+          - **Attribution**: Original authors are credited in comments
+          - **Optional**: These are suggestions - integrate only what makes sense
+          
+          ### Next Steps
+          1. Review each integration suggestion in the \`integration-suggestions/\` directory
+          2. Manually integrate appropriate snippets into the main codebase
+          3. Run tests to ensure compatibility
+          4. Update this PR with your integrations or close if not needed
+          
+          *This PR was automatically generated by the AI Workflow System based on the evaluation of competing PRs.*`;
+          
+          const { data: pr } = await github.rest.pulls.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🤖 Code Integration: Superior snippets from ${report.featureGroup} competition`,
+            head: '${{ steps.branch.outputs.branch_name }}',
+            base: 'main',
+            body: prBody
+          });
+          
+          // Add labels
+          await github.rest.issues.addLabels({
+            issue_number: pr.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: ['ai-integration', 'code-suggestions', 'automated']
+          });
+          
+          console.log(`Created integration PR #${pr.number}`);
+          
+          // Store PR number for later use
+          require('fs').writeFileSync('integration-pr.json', JSON.stringify({ number: pr.number }, null, 2));
+
+    - name: Update winner PR with integration info
+      if: steps.integration.outputs.has_snippets == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const integration = JSON.parse(require('fs').readFileSync('integration-pr.json', 'utf8'));
+          
+          const comment = `## 🔧 Code Integration Available
+          
+          The AI system has identified ${${{ steps.integration.outputs.success_count }}} superior code snippets from competing PRs that could enhance this implementation.
+          
+          **Integration PR**: #${integration.number}
+          
+          ### What's Available:
+          - Superior functions and improvements from other contributors
+          - Code with quality scores of 75+ out of 100
+          - Proper attribution to original authors
+          
+          These integrations are optional suggestions. Review them in the integration PR and incorporate any that would improve the codebase.
+          
+          *Generated by AI Workflow System*`;
+          
+          await github.rest.issues.createComment({
+            issue_number: ${{ github.event.inputs.winner_pr }},
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+    - name: Notify original authors
+      if: steps.integration.outputs.has_snippets == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const report = JSON.parse(require('fs').readFileSync('./artifacts/evaluation-report.json', 'utf8'));
+          const integration = JSON.parse(require('fs').readFileSync('integration-pr.json', 'utf8'));
+          
+          // Group snippets by author
+          const authorSnippets = {};
+          report.superiorSnippets.forEach(snippet => {
+            const author = snippet.pr.author;
+            if (!authorSnippets[author]) {
+              authorSnippets[author] = [];
+            }
+            authorSnippets[author].push(snippet);
+          });
+          
+          // Notify each author about their snippets being integrated
+          for (const [author, snippets] of Object.entries(authorSnippets)) {
+            const authorPR = snippets[0].pr.number;
+            
+            const comment = `## 🎉 Your Code Snippets Selected for Integration!
+            
+            Great news! The AI evaluation system identified **${snippets.length}** of your code snippets as superior and worthy of integration into the winning solution.
+            
+            ### Your Selected Snippets:
+            ${snippets.map(s => `- **${s.type}** in ${s.filename} (Quality: ${s.quality.score}/100)`).join('\n')}
+            
+            ### Integration Details:
+            - **Integration PR**: #${integration.number}
+            - **Your contribution** is being reviewed for inclusion in the main codebase
+            - **Attribution**: You'll be credited as the original author
+            
+            Even though your PR wasn't selected as the winner, your excellent code will potentially benefit the project. Thank you for your high-quality contribution!
+            
+            *Generated by AI Workflow System*`;
+            
+            await github.rest.issues.createComment({
+              issue_number: authorPR,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+          }
+
+    - name: Create summary report
+      if: steps.integration.outputs.has_snippets == 'true'
+      run: |
+        node -e "
+        const report = JSON.parse(require('fs').readFileSync('./artifacts/evaluation-report.json', 'utf8'));
+        const integration = JSON.parse(require('fs').readFileSync('integration-report.json', 'utf8'));
+        
+        const summary = \`# AI Integration Summary Report
+        
+        ## Feature: \${report.featureGroup}
+        ## Date: \${new Date().toISOString()}
+        
+        ### Integration Statistics
+        - Total snippets analyzed: \${integration.totalSnippets}
+        - Successfully processed: \${integration.successfulIntegrations}
+        - Requires manual review: \${integration.skipped.length}
+        - Integration PR created: Available for review
+        
+        ### Quality Metrics
+        - Average snippet quality: \${report.superiorSnippets.reduce((sum, s) => sum + s.quality.score, 0) / report.superiorSnippets.length}
+        - Integration complexity distribution:
+          - Low: \${report.superiorSnippets.filter(s => s.integrationComplexity === 'low').length}
+          - Medium: \${report.superiorSnippets.filter(s => s.integrationComplexity === 'medium').length}
+          - High: \${report.superiorSnippets.filter(s => s.integrationComplexity === 'high').length}
+        
+        ### Conclusion
+        The AI system successfully identified and prepared integration suggestions for superior code snippets from competing PRs. Manual review and testing are recommended before final integration.
+        \`;
+        
+        require('fs').writeFileSync('integration-summary.md', summary);
+        console.log('Integration summary created');
+        "
+
+    - name: Upload integration artifacts
+      if: steps.integration.outputs.has_snippets == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-artifacts-${{ github.event.inputs.winner_pr }}
+        path: |
+          integration-report.json
+          integration-pr.json
+          integration-summary.md
+        retention-days: 90
