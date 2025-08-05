@@ -37,4 +37,4 @@ if __name__ == "__main__":
         print("Invalid operation")
         exit(1)
     
-    print(f"Result: {a} {op} {b} = {result}")
+    print(f"Result: {a} {op} {b} = {result}") #up-2
