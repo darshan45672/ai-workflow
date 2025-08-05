@@ -322,7 +322,9 @@ jobs:
           script: |
             const evaluationsJson = '${{ needs.github-native-evaluation.outputs.all-evaluations }}';
             
-            console.log('📊 Evaluation JSON received:', evaluationsJson);
+            console.log('📊 Evaluation JSON received type:', typeof evaluationsJson);
+            console.log('📊 Evaluation JSON length:', evaluationsJson ? evaluationsJson.length : 0);
+            console.log('📊 First 200 chars:', evaluationsJson ? evaluationsJson.substring(0, 200) : 'null/undefined');
             
             if (!evaluationsJson || evaluationsJson === '' || evaluationsJson === 'null' || evaluationsJson === 'undefined') {
               console.log('❌ No valid evaluations found - evaluation job may not have produced output');
@@ -331,10 +333,14 @@ jobs:
             
             let allEvaluations;
             try {
+              // Use alternative parsing approach
               allEvaluations = JSON.parse(evaluationsJson);
+              console.log('✅ Successfully parsed evaluations, found', allEvaluations.length, 'groups');
             } catch (parseError) {
-              console.error('❌ Failed to parse evaluations JSON:', parseError);
-              console.error('❌ Raw JSON content:', evaluationsJson);
+              console.error('❌ Failed to parse evaluations JSON:', parseError.message);
+              console.error('❌ Parse error details:', parseError.toString());
+              console.error('❌ Raw JSON content (first 500 chars):', evaluationsJson.substring(0, 500));
+              console.error('❌ Raw JSON content (last 500 chars):', evaluationsJson.substring(Math.max(0, evaluationsJson.length - 500)));
               return;
             }
             
