@@ -1,0 +1,320 @@
+name: Code Quality Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - '**.js'
+      - '**.ts'
+      - '**.jsx'
+      - '**.tsx'
+      - '**.py'
+      - '**.java'
+      - '**.cpp'
+      - '**.c'
+      - '**.cs'
+      - '**.php'
+      - '**.rb'
+      - '**.go'
+      - '**.rs'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to analyze'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  analyze-code:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Run comprehensive code analysis
+      id: analysis
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        node -e "
+        const CodeAnalyzer = require('./scripts/code-analyzer');
+        const fs = require('fs');
+        const { Octokit } = require('@octokit/rest');
+        
+        async function runAnalysis() {
+          try {
+            const config = JSON.parse(fs.readFileSync('./config/evaluation-config.json', 'utf8'));
+            const analyzer = new CodeAnalyzer(config);
+            const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+            
+            const prNumber = '${{ github.event.pull_request.number }}' || '${{ github.event.inputs.pr_number }}';
+            const { owner, repo } = { owner: '${{ github.repository_owner }}', repo: '${{ github.event.repository.name }}' };
+            
+            console.log('Analyzing PR #' + prNumber);
+            
+            // Get PR files
+            const { data: files } = await octokit.rest.pulls.listFiles({
+              owner,
+              repo,
+              pull_number: parseInt(prNumber)
+            });
+            
+            console.log('Found', files.length, 'files to analyze');
+            
+            // Run analysis
+            const results = {
+              complexity: await analyzer.analyzeComplexity(files),
+              standards: await analyzer.checkCodingStandards(files),
+              duplication: await analyzer.detectDuplication(files),
+              maintainability: await analyzer.calculateMaintainability(files),
+              testQuality: await analyzer.analyzeTestQuality(files)
+            };
+            
+            // Generate report
+            const report = analyzer.generateAnalysisReport(results);
+            
+            // Calculate overall score
+            const overallScore = Math.round(
+              (100 - Math.min(results.complexity * 5, 50)) * 0.25 +
+              results.standards * 0.30 +
+              (100 - Math.min(results.duplication * 10, 50)) * 0.20 +
+              results.maintainability * 0.25
+            );
+            
+            console.log('Analysis complete. Overall score:', overallScore);
+            
+            // Save detailed report
+            const detailedReport = {
+              prNumber: parseInt(prNumber),
+              analysisDate: new Date().toISOString(),
+              overallScore,
+              results,
+              report,
+              files: files.map(f => ({
+                filename: f.filename,
+                status: f.status,
+                additions: f.additions,
+                deletions: f.deletions,
+                changes: f.changes
+              }))
+            };
+            
+            fs.writeFileSync('code-analysis-report.json', JSON.stringify(detailedReport, null, 2));
+            
+            // Set outputs
+            console.log('::set-output name=overall_score::' + overallScore);
+            console.log('::set-output name=complexity_score::' + (100 - Math.min(results.complexity * 5, 50)));
+            console.log('::set-output name=standards_score::' + results.standards);
+            console.log('::set-output name=duplication_score::' + (100 - Math.min(results.duplication * 10, 50)));
+            console.log('::set-output name=maintainability_score::' + results.maintainability);
+            console.log('::set-output name=test_score::' + results.testQuality.score);
+            
+          } catch (error) {
+            console.error('Code analysis failed:', error.message);
+            console.error('Stack trace:', error.stack);
+            process.exit(1);
+          }
+        }
+        
+        runAnalysis();
+        "
+
+    - name: Upload analysis report
+      uses: actions/upload-artifact@v4
+      with:
+        name: code-analysis-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        path: code-analysis-report.json
+        retention-days: 30
+
+    - name: Create analysis summary
+      id: summary
+      run: |
+        node -e "
+        const report = JSON.parse(require('fs').readFileSync('code-analysis-report.json', 'utf8'));
+        
+        const getScoreEmoji = (score) => {
+          if (score >= 90) return '🟢';
+          if (score >= 70) return '🟡';
+          if (score >= 50) return '🟠';
+          return '🔴';
+        };
+        
+        const getGrade = (score) => {
+          if (score >= 90) return 'A';
+          if (score >= 80) return 'B';
+          if (score >= 70) return 'C';
+          if (score >= 60) return 'D';
+          return 'F';
+        };
+        
+        const complexity = 100 - Math.min(report.results.complexity * 5, 50);
+        const duplication = 100 - Math.min(report.results.duplication * 10, 50);
+        
+        const markdown = \`## 📊 Code Quality Analysis Report
+        
+        ### Overall Score: \${getScoreEmoji(report.overallScore)} \${report.overallScore}/100 (Grade: \${getGrade(report.overallScore)})
+        
+        | Metric | Score | Status | Details |
+        |--------|-------|--------|---------|
+        | Complexity | \${getScoreEmoji(complexity)} \${complexity.toFixed(1)}/100 | \${complexity >= 70 ? 'Good' : 'Needs Improvement'} | Avg complexity: \${report.results.complexity.toFixed(1)} |
+        | Standards | \${getScoreEmoji(report.results.standards)} \${report.results.standards.toFixed(1)}/100 | \${report.results.standards >= 80 ? 'Excellent' : report.results.standards >= 60 ? 'Good' : 'Poor'} | Coding standards compliance |
+        | Duplication | \${getScoreEmoji(duplication)} \${duplication.toFixed(1)}/100 | \${duplication >= 80 ? 'Excellent' : duplication >= 60 ? 'Good' : 'High'} | \${report.results.duplication} duplicate blocks found |
+        | Maintainability | \${getScoreEmoji(report.results.maintainability)} \${report.results.maintainability.toFixed(1)}/100 | \${report.results.maintainability >= 70 ? 'Good' : 'Needs Work'} | Code maintainability index |
+        | Test Quality | \${getScoreEmoji(report.results.testQuality.score)} \${report.results.testQuality.score.toFixed(1)}/100 | \${report.results.testQuality.testFileCount > 0 ? 'Tests Found' : 'No Tests'} | \${report.results.testQuality.testFileCount} test files |
+        
+        ### 📁 Files Analyzed: \${report.files.length}
+        \${report.files.map(f => \`- \${f.filename} (\${f.status}): +\${f.additions}/-\${f.deletions}\`).join('\\n')}
+        
+        ### 💡 Recommendations:
+        \${report.report.recommendations.map(r => \`- \${r}\`).join('\\n')}
+        
+        ### Quality Gates:
+        \${report.overallScore >= 80 ? '✅ **Passes quality gates**' : '❌ **Quality gates not met**'}
+        \${complexity >= 70 ? '✅ Complexity: Acceptable' : '❌ Complexity: Too high'}
+        \${report.results.standards >= 80 ? '✅ Standards: Compliant' : '❌ Standards: Non-compliant'}
+        \${duplication >= 80 ? '✅ Duplication: Low' : '❌ Duplication: High'}
+        \${report.results.maintainability >= 70 ? '✅ Maintainability: Good' : '❌ Maintainability: Poor'}
+        
+        ---
+        *Analysis completed on \${new Date(report.analysisDate).toLocaleString()}*
+        \`;
+        
+        require('fs').writeFileSync('analysis-summary.md', markdown);
+        console.log('Summary generated');
+        "
+
+    - name: Comment analysis results
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = fs.readFileSync('analysis-summary.md', 'utf8');
+          
+          // Find existing analysis comment to update
+          const comments = await github.rest.issues.listComments({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          });
+          
+          const existingComment = comments.data.find(comment => 
+            comment.body.includes('📊 Code Quality Analysis Report')
+          );
+          
+          if (existingComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              comment_id: existingComment.id,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+          }
+
+    - name: Create check run
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const overallScore = ${{ steps.analysis.outputs.overall_score }};
+          const conclusion = overallScore >= 70 ? 'success' : overallScore >= 50 ? 'neutral' : 'failure';
+          
+          await github.rest.checks.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'Code Quality Analysis',
+            head_sha: context.sha,
+            status: 'completed',
+            conclusion: conclusion,
+            output: {
+              title: `Code Quality Score: ${overallScore}/100`,
+              summary: `Overall code quality analysis completed with score ${overallScore}/100`,
+              text: `
+              ## Analysis Results
+              - Overall Score: ${overallScore}/100
+              - Complexity: ${{ steps.analysis.outputs.complexity_score }}/100
+              - Standards: ${{ steps.analysis.outputs.standards_score }}/100
+              - Duplication: ${{ steps.analysis.outputs.duplication_score }}/100
+              - Maintainability: ${{ steps.analysis.outputs.maintainability_score }}/100
+              - Test Quality: ${{ steps.analysis.outputs.test_score }}/100
+              `
+            }
+          });
+
+    - name: Fail if quality gates not met
+      if: steps.analysis.outputs.overall_score < 50
+      run: |
+        echo "❌ Code quality score (${{ steps.analysis.outputs.overall_score }}) is below minimum threshold (50)"
+        echo "Please address the identified issues before proceeding."
+        exit 1
+
+    - name: Set PR labels based on quality
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const score = ${{ steps.analysis.outputs.overall_score }};
+          const labels = [];
+          
+          // Remove existing quality labels
+          const { data: existingLabels } = await github.rest.issues.listLabelsOnIssue({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          });
+          
+          const qualityLabels = existingLabels
+            .filter(label => label.name.startsWith('quality:'))
+            .map(label => label.name);
+          
+          if (qualityLabels.length > 0) {
+            await github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: qualityLabels[0]
+            });
+          }
+          
+          // Add new quality label
+          if (score >= 90) {
+            labels.push('quality:excellent');
+          } else if (score >= 70) {
+            labels.push('quality:good');
+          } else if (score >= 50) {
+            labels.push('quality:acceptable');
+          } else {
+            labels.push('quality:poor');
+          }
+          
+          if (labels.length > 0) {
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: labels
+            });
+          }

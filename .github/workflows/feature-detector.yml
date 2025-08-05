@@ -1,0 +1,174 @@
+name: Feature Detection and PR Grouping
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to analyze (optional)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  detect-features:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Detect related PRs
+      id: feature-detection
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        node -e "
+        const FeatureDetector = require('./scripts/feature-detector');
+        const fs = require('fs');
+        const config = JSON.parse(fs.readFileSync('./config/evaluation-config.json', 'utf8'));
+        
+        async function detectFeatures() {
+          const detector = new FeatureDetector(config);
+          const prNumber = '${{ github.event.pull_request.number }}' || '${{ github.event.inputs.pr_number }}';
+          
+          if (!prNumber) {
+            console.log('No PR number provided');
+            return;
+          }
+
+          try {
+            const currentPR = {
+              number: parseInt(prNumber),
+              title: '${{ github.event.pull_request.title }}',
+              head: { ref: '${{ github.event.pull_request.head.ref }}' },
+              user: { login: '${{ github.event.pull_request.user.login }}' },
+              created_at: '${{ github.event.pull_request.created_at }}',
+              updated_at: '${{ github.event.pull_request.updated_at }}'
+            };
+
+            const relatedPRs = await detector.detectRelatedPRs(currentPR);
+            
+            if (relatedPRs.length > 0) {
+              console.log('Related PRs found:', relatedPRs.length);
+              
+              // Create feature group
+              const featureGroup = {
+                feature: detector.extractFeatureName(currentPR),
+                mainPR: currentPR,
+                relatedPRs: relatedPRs,
+                detectedAt: new Date().toISOString(),
+                competition: true
+              };
+              
+              // Save feature group data
+              fs.writeFileSync('feature-group.json', JSON.stringify(featureGroup, null, 2));
+              
+              // Set output for next steps
+              console.log('::set-output name=has_competition::true');
+              console.log('::set-output name=feature_name::' + featureGroup.feature);
+              console.log('::set-output name=related_count::' + relatedPRs.length);
+              
+              // Trigger evaluation workflow
+              console.log('::set-output name=trigger_evaluation::true');
+            } else {
+              console.log('No related PRs found');
+              console.log('::set-output name=has_competition::false');
+            }
+          } catch (error) {
+            console.error('Feature detection failed:', error.message);
+            process.exit(1);
+          }
+        }
+        
+        detectFeatures();
+        "
+
+    - name: Upload feature group data
+      if: steps.feature-detection.outputs.has_competition == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: feature-group-${{ github.event.pull_request.number }}
+        path: feature-group.json
+        retention-days: 30
+
+    - name: Comment on PR about competition
+      if: steps.feature-detection.outputs.has_competition == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const featureGroup = JSON.parse(require('fs').readFileSync('feature-group.json', 'utf8'));
+          
+          const comment = `## 🤖 AI Workflow: Feature Competition Detected
+          
+          This PR is competing with **${{ steps.feature-detection.outputs.related_count }}** other PR(s) for the same feature: **${{ steps.feature-detection.outputs.feature_name }}**
+          
+          ### Competing PRs:
+          ${featureGroup.relatedPRs.map(pr => `- #${pr.number}: ${pr.title} by @${pr.author}`).join('\n')}
+          
+          ### What happens next:
+          1. 🔍 **AI Analysis**: All competing PRs will be analyzed and scored
+          2. 📊 **Evaluation Report**: Detailed comparison will be generated
+          3. 🏆 **Best PR Selection**: The highest-scoring PR will be selected for merge
+          4. 🔧 **Code Integration**: Superior snippets from other PRs may be integrated
+          
+          ### Evaluation Criteria:
+          - **Code Quality (30%)**: Complexity, standards, maintainability
+          - **Testing & Coverage (25%)**: Test completeness and quality
+          - **Performance (20%)**: Optimization and efficiency
+          - **Security (15%)**: Vulnerability scanning and best practices
+          - **Documentation (10%)**: Comments and documentation quality
+          
+          The evaluation will begin shortly. You can track progress in the Actions tab.
+          `;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+    - name: Trigger AI evaluation
+      if: steps.feature-detection.outputs.trigger_evaluation == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'ai-pr-evaluator.yml',
+            ref: 'main',
+            inputs: {
+              feature_group_artifact: `feature-group-${{ github.event.pull_request.number }}`,
+              trigger_pr: '${{ github.event.pull_request.number }}'
+            }
+          });
+
+    - name: Label PR for tracking
+      if: steps.feature-detection.outputs.has_competition == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.addLabels({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: ['ai-evaluation', 'feature-competition', 'automated-workflow']
+          });

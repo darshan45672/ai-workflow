@@ -1,0 +1,318 @@
+name: AI-Powered PR Evaluation and Selection
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_group_artifact:
+        description: 'Feature group artifact name'
+        required: true
+        type: string
+      trigger_pr:
+        description: 'PR number that triggered the evaluation'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+jobs:
+  evaluate-prs:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Download feature group data
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ github.event.inputs.feature_group_artifact }}
+        path: ./artifacts/
+
+    - name: Evaluate competing PRs
+      id: evaluation
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        node -e "
+        const PRScorer = require('./scripts/pr-scorer');
+        const SnippetExtractor = require('./scripts/snippet-extractor');
+        const fs = require('fs');
+        
+        async function evaluatePRs() {
+          try {
+            const config = JSON.parse(fs.readFileSync('./config/evaluation-config.json', 'utf8'));
+            const featureGroup = JSON.parse(fs.readFileSync('./artifacts/feature-group.json', 'utf8'));
+            
+            const scorer = new PRScorer(config);
+            const extractor = new SnippetExtractor(config);
+            
+            console.log('Starting evaluation of', featureGroup.relatedPRs.length + 1, 'PRs');
+            
+            // Evaluate all PRs including the main one
+            const allPRs = [featureGroup.mainPR, ...featureGroup.relatedPRs];
+            const evaluations = [];
+            
+            for (const pr of allPRs) {
+              console.log('Evaluating PR #' + pr.number);
+              const evaluation = await scorer.scorePR(pr);
+              evaluations.push(evaluation);
+            }
+            
+            // Sort by weighted score (highest first)
+            evaluations.sort((a, b) => b.weightedScore - a.weightedScore);
+            
+            const winner = evaluations[0];
+            const losers = evaluations.slice(1);
+            
+            console.log('Winner: PR #' + winner.pr.number + ' with score', winner.weightedScore);
+            
+            // Extract superior snippets from losing PRs
+            console.log('Extracting superior snippets from losing PRs...');
+            const snippets = await extractor.extractSuperiorSnippets(winner.pr, losers.map(l => l.pr));
+            
+            // Generate comprehensive report
+            const report = {
+              featureGroup: featureGroup.feature,
+              evaluationDate: new Date().toISOString(),
+              winner: winner,
+              evaluations: evaluations,
+              superiorSnippets: snippets,
+              integrationPlan: extractor.generateIntegrationPlan(snippets),
+              summary: {
+                totalPRs: evaluations.length,
+                winnerScore: winner.weightedScore,
+                averageScore: evaluations.reduce((sum, e) => sum + e.weightedScore, 0) / evaluations.length,
+                snippetsFound: snippets.length,
+                autoMergeEligible: winner.meetsThresholds.autoMergeEligible
+              }
+            };
+            
+            // Save evaluation report
+            fs.writeFileSync('evaluation-report.json', JSON.stringify(report, null, 2));
+            
+            // Set outputs
+            console.log('::set-output name=winner_pr::' + winner.pr.number);
+            console.log('::set-output name=winner_score::' + winner.weightedScore);
+            console.log('::set-output name=auto_merge_eligible::' + winner.meetsThresholds.autoMergeEligible);
+            console.log('::set-output name=snippets_found::' + snippets.length);
+            
+          } catch (error) {
+            console.error('Evaluation failed:', error.message);
+            process.exit(1);
+          }
+        }
+        
+        evaluatePRs();
+        "
+
+    - name: Upload evaluation report
+      uses: actions/upload-artifact@v4
+      with:
+        name: evaluation-report-${{ github.event.inputs.trigger_pr }}
+        path: evaluation-report.json
+        retention-days: 90
+
+    - name: Generate evaluation summary
+      id: summary
+      run: |
+        node -e "
+        const report = JSON.parse(require('fs').readFileSync('evaluation-report.json', 'utf8'));
+        
+        const markdown = \`## 🏆 AI Evaluation Results: \${report.featureGroup}
+        
+        ### Winner: PR #\${report.winner.pr.number}
+        **Score: \${report.winner.weightedScore.toFixed(1)}/100** | **Author:** @\${report.winner.pr.author}
+        **Title:** \${report.winner.pr.title}
+        
+        #### Detailed Scores:
+        - **Code Quality (30%):** \${report.winner.scores.codeQuality.score.toFixed(1)}/100
+        - **Testing & Coverage (25%):** \${report.winner.scores.testing.score.toFixed(1)}/100  
+        - **Performance (20%):** \${report.winner.scores.performance.score.toFixed(1)}/100
+        - **Security (15%):** \${report.winner.scores.security.score.toFixed(1)}/100
+        - **Documentation (10%):** \${report.winner.scores.documentation.score.toFixed(1)}/100
+        
+        ### All Evaluations:
+        | PR | Author | Score | Code Quality | Testing | Performance | Security | Documentation |
+        |----|----|----|----|----|----|----|----|
+        \${report.evaluations.map(e => 
+          \`| #\${e.pr.number} | @\${e.pr.author} | \${e.weightedScore.toFixed(1)} | \${e.scores.codeQuality.score.toFixed(1)} | \${e.scores.testing.score.toFixed(1)} | \${e.scores.performance.score.toFixed(1)} | \${e.scores.security.score.toFixed(1)} | \${e.scores.documentation.score.toFixed(1)} |\`
+        ).join('\\n')}
+        
+        ### Superior Code Snippets Found: \${report.superiorSnippets.length}
+        \${report.superiorSnippets.length > 0 ? 
+          report.superiorSnippets.slice(0, 5).map(s => 
+            \`- **\${s.type}** from PR #\${s.pr.number} (\${s.filename}) - Quality: \${s.quality.score}/100\`
+          ).join('\\n') + 
+          (report.superiorSnippets.length > 5 ? \`\\n- *... and \${report.superiorSnippets.length - 5} more*\` : '')
+          : '*(No superior snippets identified)*'
+        }
+        
+        ### Next Steps:
+        \${report.summary.autoMergeEligible ? 
+          '✅ **Auto-merge eligible** - PR meets all quality thresholds' : 
+          '⚠️ **Manual review required** - PR does not meet auto-merge thresholds'
+        }
+        
+        \${report.superiorSnippets.length > 0 ? 
+          \`🔧 **Code integration planned** - \${report.integrationPlan.estimatedEffort}h estimated effort for \${report.superiorSnippets.length} snippets\` : 
+          ''
+        }
+        
+        ---
+        *Generated on \${new Date(report.evaluationDate).toLocaleString()} by AI Workflow System*
+        \`;
+        
+        // Write to file for posting
+        require('fs').writeFileSync('summary.md', markdown);
+        console.log('Summary generated');
+        "
+
+    - name: Comment evaluation results on all PRs
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('evaluation-report.json', 'utf8'));
+          const summary = fs.readFileSync('summary.md', 'utf8');
+          
+          // Comment on all competing PRs
+          const allPRs = [report.featureGroup.mainPR, ...report.featureGroup.relatedPRs];
+          
+          for (const pr of allPRs) {
+            const isWinner = pr.number === report.winner.pr.number;
+            const prEvaluation = report.evaluations.find(e => e.pr.number === pr.number);
+            
+            const prComment = `${summary}
+            
+            ${isWinner ? 
+              '🎉 **This PR has been selected as the winner!**' : 
+              `📊 **This PR scored ${prEvaluation.weightedScore.toFixed(1)}/100** and was not selected.`
+            }
+            
+            ${!isWinner && report.superiorSnippets.some(s => s.pr.number === pr.number) ?
+              '🔧 **Good news:** Some of your code snippets have been identified as superior and may be integrated into the winning PR!' :
+              ''
+            }`;
+            
+            await github.rest.issues.createComment({
+              issue_number: pr.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: prComment
+            });
+          }
+
+    - name: Auto-merge winner if eligible
+      if: steps.evaluation.outputs.auto_merge_eligible == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const winnerPR = ${{ steps.evaluation.outputs.winner_pr }};
+          
+          try {
+            // Check if PR is still open and mergeable
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: winnerPR
+            });
+            
+            if (pr.state === 'open' && pr.mergeable) {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: winnerPR,
+                commit_title: `🤖 AI Auto-merge: ${pr.title}`,
+                commit_message: `Auto-merged by AI Workflow System with score ${${{ steps.evaluation.outputs.winner_score }}}/100`,
+                merge_method: 'squash'
+              });
+              
+              console.log(`Successfully auto-merged PR #${winnerPR}`);
+            } else {
+              console.log(`PR #${winnerPR} is not mergeable - requires manual intervention`);
+            }
+          } catch (error) {
+            console.error('Auto-merge failed:', error.message);
+          }
+
+    - name: Close losing PRs with explanation
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const report = JSON.parse(fs.readFileSync('evaluation-report.json', 'utf8'));
+          
+          const losingPRs = report.evaluations.filter(e => e.pr.number !== report.winner.pr.number);
+          
+          for (const evaluation of losingPRs) {
+            const hasSnippets = report.superiorSnippets.some(s => s.pr.number === evaluation.pr.number);
+            
+            const closeComment = `## 🤖 AI Workflow: PR Competition Results
+            
+            This PR was not selected in the feature competition for **${report.featureGroup}**.
+            
+            **Your Score:** ${evaluation.weightedScore.toFixed(1)}/100
+            **Winner:** PR #${report.winner.pr.number} with ${report.winner.weightedScore.toFixed(1)}/100
+            
+            ### Your Evaluation Breakdown:
+            - Code Quality: ${evaluation.scores.codeQuality.score.toFixed(1)}/100
+            - Testing & Coverage: ${evaluation.scores.testing.score.toFixed(1)}/100
+            - Performance: ${evaluation.scores.performance.score.toFixed(1)}/100
+            - Security: ${evaluation.scores.security.score.toFixed(1)}/100
+            - Documentation: ${evaluation.scores.documentation.score.toFixed(1)}/100
+            
+            ${hasSnippets ? 
+              `🎉 **Great work!** ${report.superiorSnippets.filter(s => s.pr.number === evaluation.pr.number).length} of your code snippets were identified as superior and will be integrated into the winning PR.` :
+              ''
+            }
+            
+            Thank you for your contribution! The AI system identified areas where your approach excelled, and this feedback can help improve future contributions.
+            
+            *This PR is being automatically closed. If you believe this is an error, please contact the maintainers.*`;
+            
+            await github.rest.issues.createComment({
+              issue_number: evaluation.pr.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: closeComment
+            });
+            
+            // Close the PR
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: evaluation.pr.number,
+              state: 'closed'
+            });
+          }
+
+    - name: Trigger snippet integration
+      if: steps.evaluation.outputs.snippets_found > 0
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'snippet-integrator.yml',
+            ref: 'main',
+            inputs: {
+              evaluation_report_artifact: `evaluation-report-${{ github.event.inputs.trigger_pr }}`,
+              winner_pr: '${{ steps.evaluation.outputs.winner_pr }}'
+            }
+          });
