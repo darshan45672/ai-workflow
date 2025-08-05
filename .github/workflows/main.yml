@@ -48,6 +48,7 @@ jobs:
               
               // Enhanced feature detection
               const branchMatch = branchName.match(/^(feature|bugfix|enhancement|fix|feat)([\/\-](.+)|[0-9]+)$/);
+              const branchMatch = branchName.match(/^(feature|bugfix|enhancement|fix|feat)([\/\-](.+)|[0-9]+)$/);
               if (branchMatch) {
                 const prefix = branchMatch[1];
                 const suffix = branchMatch[3] || branchMatch[2] || 'default';
@@ -67,6 +68,8 @@ jobs:
               // Keyword detection
               const keywords = [
                 'auth', 'login', 'user', 'dashboard', 'api', 'database', 'ui', 'frontend', 'backend',
+                'crud', 'rest', 'graphql', 'middleware', 'service', 'controller', 'model', 'view',
+                'calculator', 'calc', 'math', 'compute', 'operation', 'function'
                 'crud', 'rest', 'graphql', 'middleware', 'service', 'controller', 'model', 'view',
                 'calculator', 'calc', 'math', 'compute', 'operation', 'function'
               ];
